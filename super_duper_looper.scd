@@ -106,10 +106,9 @@
 };
 
 ~ledRow = { |row, vals|
-    // build bitmask with doWithIndex so the column index i is available
     var mask = 0;
-    vals.doWithIndex { |v, i| mask = mask | (v.asInteger << i) };
-    vals.doWithIndex { |v, i| ~ledState[row][i] = v };
+    vals.do { |v, i| mask = mask | (v.asInteger << i) };
+    vals.do { |v, i| ~ledState[row][i] = v };
     ~monomeAddr.sendMsg(~monomePrefix ++ "/grid/led/row", 0, row, mask);
 };
 
