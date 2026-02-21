@@ -73,18 +73,18 @@
         FreeSelf.kr(1 - gate);
     }).add;
 
-    // Play back buffer with variable start/end
+    // Play back buffer with variable start/end (stereo output)
     SynthDef(\loopPlay, { |bufnum, outBus = 0, startFrame = 0, endFrame = 44100,
                            amp = 0.8, gate = 1|
         var env   = EnvGen.kr(Env.asr(0.005, 1, 0.005), gate, doneAction: 2);
         var phase = Phasor.ar(0, BufRateScale.kr(bufnum), startFrame, endFrame, startFrame);
         var sig   = BufRd.ar(1, bufnum, phase);
-        Out.ar(outBus, sig * amp * env);
+        Out.ar(outBus, (sig * amp * env).dup(2));
     }).add;
 
-    // Passthrough: monitor live input
+    // Passthrough: monitor live input (stereo output)
     SynthDef(\inputMonitor, { |inputBus = 0, outBus = 0, amp = 0.5|
-        Out.ar(outBus, SoundIn.ar(inputBus) * amp);
+        Out.ar(outBus, SoundIn.ar(inputBus).dup(2) * amp);
     }).add;
 
     s.sync;
@@ -265,9 +265,15 @@
     ~monomeConnected = true;
     deviceAddr.sendMsg("/sys/port",   ~monomeReceivePort);
     deviceAddr.sendMsg("/sys/prefix", ~monomePrefix);
-    // small delay so device processes /sys/prefix before LED commands arrive
-    SystemClock.sched(0.05, { ~updateDisplay.(); nil });
-    "monome manually connected on port %".format(devicePort).postln;
+    // 50 ms: let /sys/prefix take effect, then flash ALL LEDs on as a connection test
+    SystemClock.sched(0.05, {
+        ~monomeAddr.sendMsg(~monomePrefix ++ "/grid/led/all", 1);
+        nil
+    });
+    // 400 ms: switch to real display state
+    SystemClock.sched(0.4, { ~updateDisplay.(); nil });
+    "=== monome connected on port % (sending to this port) ===".format(devicePort).postln;
+    "    If ALL LEDs flash briefly the connection is good.".postln;
 };
 
 ~setupMonome = {
