@@ -148,6 +148,9 @@
     // Row 6: transport
     trRow[0] = if(~transport) { 1 } { 0 };
     ~ledRow.(6, trRow);
+
+    // Row 7: unused — always dark
+    ~ledRow.(7, Array.fill(~numCols, 0));
 };
 
 // ---------------------------------------------------------------------------
@@ -270,8 +273,12 @@
         ~monomeAddr.sendMsg(~monomePrefix ++ "/grid/led/all", 1);
         nil
     });
-    // 400 ms: switch to real display state
-    SystemClock.sched(0.4, { ~updateDisplay.(); nil });
+    // 400 ms: clear flash then draw real display state
+    SystemClock.sched(0.4, {
+        ~monomeAddr.sendMsg(~monomePrefix ++ "/grid/led/all", 0);
+        ~updateDisplay.();
+        nil
+    });
     "=== monome connected on port % (sending to this port) ===".format(devicePort).postln;
     "    If ALL LEDs flash briefly the connection is good.".postln;
 };
