@@ -105,9 +105,10 @@
 };
 
 ~ledRow = { |row, vals|
-    // var must be first — compute mask before the .do loop
-    var mask = vals.inject(0, { |acc, v, i| acc | (v << i) });
-    vals.do { |v, c| ~ledState[row][c] = v };
+    // build bitmask with doWithIndex so the column index i is available
+    var mask = 0;
+    vals.doWithIndex { |v, i| mask = mask | (v.asInteger << i) };
+    vals.doWithIndex { |v, i| ~ledState[row][i] = v };
     ~monomeAddr.sendMsg(~monomePrefix ++ "/grid/led/row", 0, row, mask);
 };
 
@@ -125,13 +126,12 @@
     var odRow  = Array.fill(~numCols, 0);
     var trRow  = Array.fill(~numCols, 0);
 
-    // Rows 0-3: loop range and playhead per track
+    // Rows 0-3: mlr-style — single moving LED shows playhead when transport on
     ~numTracks.do { |track|
-        var row   = Array.fill(~numCols, 0);
-        var start = ~loopStart[track];
-        var end   = ~loopEnd[track];
-        (start..end).do { |col| row[col] = 1 };
-        row[~playPos[track]] = 1;
+        var row = Array.fill(~numCols, 0);
+        if(~transport && ~isPlaying[track]) {
+            row[~playPos[track]] = 1;
+        };
         ~ledRow.(track, row);
     };
 
@@ -252,6 +252,29 @@
 };
 
 // ---------------------------------------------------------------------------
+// serialosc device registration
+// ---------------------------------------------------------------------------
+// Queries serialosc (port 12002) for connected monome devices, then tells
+// the device to send button events to our receive port and sets the prefix.
+// ~monomeAddr is updated automatically when the device responds.
+~setupMonome = {
+    OSCdef(\serialoscDevice, { |msg|
+        var devicePort = msg[3].asInteger;
+        var deviceAddr = NetAddr("127.0.0.1", devicePort);
+        "monome found: type=%, port=%".format(msg[2], devicePort).postln;
+        ~monomeAddr = deviceAddr;
+        deviceAddr.sendMsg("/sys/port",   ~monomeReceivePort);
+        deviceAddr.sendMsg("/sys/prefix", ~monomePrefix);
+        // re-draw LEDs now that we have the real device address
+        ~updateDisplay.();
+        OSCdef(\serialoscDevice).free;
+    }, "/serialosc/device", recvPort: ~monomeReceivePort);
+
+    NetAddr("127.0.0.1", 12002).sendMsg("/serialosc/list", "127.0.0.1", ~monomeReceivePort);
+    "querying serialosc for monome devices...".postln;
+};
+
+// ---------------------------------------------------------------------------
 // monome OSC handlers
 // ---------------------------------------------------------------------------
 ~setupOSC = {
@@ -262,31 +285,26 @@
 
         if(state == 1) {
             case
-            // Rows 0-3: set loop start/end for each track
+            // Rows 0-3: mlr-style — jump playhead to pressed column
             { row < ~numTracks } {
-                var track = row;
-                if(~loopStart[track] == col) {
-                    ~loopStart[track] = col;
-                    ~loopEnd[track]   = col;
-                } {
-                    if(col > ~loopStart[track]) {
-                        ~loopEnd[track] = col;
-                    } {
-                        ~loopStart[track] = col;
-                        if(~loopEnd[track] < col) { ~loopEnd[track] = col };
-                    };
-                };
-                if(~isPlaying[track] && ~playNodes[track].notNil) {
-                    ~playNodes[track].set(
-                        \startFrame, ~segToFrame.(~loopStart[track]),
-                        \endFrame,   ~segToFrame.(~loopEnd[track] + 1)
-                    );
+                var track  = row;
+                var startF = ~segToFrame.(col);
+                var endF   = ~bufFrames;      // always play to end of buffer
+                ~playPos[track]    = col;
+                ~loopStart[track]  = col;
+                ~loopEnd[track]    = ~numCols - 1;
+                if(~transport && ~isPlaying[track]) {
+                    ~playNodes[track] !? { ~playNodes[track].set(\gate, 0) };
+                    ~playNodes[track] = Synth(\loopPlay, [
+                        \bufnum,     ~buffers[track],
+                        \outBus,     ~outBus,
+                        \startFrame, startF,
+                        \endFrame,   endF,
+                        \amp,        0.8
+                    ]);
                 };
                 if(~isRecording[track] && ~recNodes[track].notNil) {
-                    ~recNodes[track].set(
-                        \startFrame, ~segToFrame.(~loopStart[track]),
-                        \endFrame,   ~segToFrame.(~loopEnd[track] + 1)
-                    );
+                    ~recNodes[track].set(\startFrame, startF, \endFrame, endF);
                 };
                 ~updateDisplay.();
             }
@@ -342,7 +360,8 @@ s.waitForBoot({
     ~allocBuffers.();
     s.sync;
     ~setupOSC.();
-    ~updateDisplay.();
+    ~setupMonome.();   // auto-discover device, set /sys/port + /sys/prefix, update ~monomeAddr
+    ~updateDisplay.(); // initial draw (will re-draw again after device responds)
 
     ~monitorNode = Synth(\inputMonitor, [\inputBus, ~inputBus, \outBus, ~outBus, \amp, 0.5]);
 
