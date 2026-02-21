@@ -54,7 +54,7 @@
     ~numTracks.do { |i|
         ~buffers[i] = Buffer.alloc(s, ~bufFrames, 1);
     };
-    "Buffers allocated (%  tracks, % sec each)".format(~numTracks, ~loopDuration).postln;
+    "Buffers allocated (% tracks, % sec each)".format(~numTracks, ~loopDuration).postln;
 };
 
 // ---------------------------------------------------------------------------
@@ -69,11 +69,10 @@
         var rec   = RecordBuf.ar(input, bufnum, offset: startFrame,
                                  recLevel: recLevel, preLevel: preLevel,
                                  run: gate, loop: 1);
-        // end when gate closes
         FreeSelf.kr(1 - gate);
     }).add;
 
-    // Play back buffer with variable start/end and speed
+    // Play back buffer with variable start/end
     SynthDef(\loopPlay, { |bufnum, outBus = 0, startFrame = 0, endFrame = 44100,
                            amp = 0.8, gate = 1|
         var env   = EnvGen.kr(Env.asr(0.005, 1, 0.005), gate, doneAction: 2);
@@ -106,9 +105,9 @@
 };
 
 ~ledRow = { |row, vals|
-    vals.do { |v, c| ~ledState[row][c] = v };
-    // encode as bitmask for /grid/led/row
+    // var must be first — compute mask before the .do loop
     var mask = vals.inject(0, { |acc, v, i| acc | (v << i) });
+    vals.do { |v, c| ~ledState[row][c] = v };
     ~monomeAddr.sendMsg(~monomePrefix ++ "/grid/led/row", 0, row, mask);
 };
 
@@ -121,55 +120,52 @@
 // Display update
 // ---------------------------------------------------------------------------
 ~updateDisplay = {
+    // declare all vars at top of block
+    var recRow = Array.fill(~numCols, 0);
+    var odRow  = Array.fill(~numCols, 0);
+    var trRow  = Array.fill(~numCols, 0);
+
     // Rows 0-3: loop range and playhead per track
     ~numTracks.do { |track|
-        var row = Array.fill(~numCols, 0);
+        var row   = Array.fill(~numCols, 0);
         var start = ~loopStart[track];
         var end   = ~loopEnd[track];
-        // dim: loop range
         (start..end).do { |col| row[col] = 1 };
-        // bright: playhead (mark with value 1 for now; use level 1 for both)
-        // monome only has on/off in basic mode; we mark playhead differently
-        // by toggling rapidly — here we just mark position
         row[~playPos[track]] = 1;
-        // record arm: blink handled by state
-        if(~isRecording[track]) { row[~loopStart[track]] = 1 };
         ~ledRow.(track, row);
     };
 
     // Row 4: record arm indicators (col 0-3)
-    var recRow = Array.fill(~numCols, 0);
     ~numTracks.do { |t| recRow[t] = if(~isRecording[t]) { 1 } { 0 } };
     ~ledRow.(4, recRow);
 
     // Row 5: overdub (col 0-3) and clear (col 4-7)
-    var odRow = Array.fill(~numCols, 0);
     ~numTracks.do { |t|
         odRow[t]     = if(~isOverdub[t]) { 1 } { 0 };
-        odRow[t + 4] = 0; // clear buttons, unlit
+        odRow[t + 4] = 0;
     };
     ~ledRow.(5, odRow);
 
     // Row 6: transport
-    var trRow = Array.fill(~numCols, 0);
-    trRow[0] = if(~transport) { 1 } { 0 }; // play/stop
+    trRow[0] = if(~transport) { 1 } { 0 };
     ~ledRow.(6, trRow);
 };
 
 // ---------------------------------------------------------------------------
-// Playhead tracker (runs on language side with a Routine)
+// Playhead tracker
 // ---------------------------------------------------------------------------
 ~playheadRoutine = nil;
 
 ~startPlayheadTracker = {
+    var segDur = ~loopDuration / ~numCols;
     ~playheadRoutine !? { ~playheadRoutine.stop };
     ~playheadRoutine = Routine({
-        var segDur = ~loopDuration / ~numCols;
         loop {
             if(~transport) {
                 ~numTracks.do { |t|
+                    var newPos;
                     if(~isPlaying[t]) {
-                        var newPos = ~playPos[t] + 1;
+                        newPos = ~playPos[t] + 1;
                         if(newPos > ~loopEnd[t]) { newPos = ~loopStart[t] };
                         ~playPos[t] = newPos;
                     };
@@ -187,9 +183,9 @@
 ~startTransport = {
     ~transport = true;
     ~numTracks.do { |t|
-        if(~playNodes[t].notNil) { ~playNodes[t].free };
         var startF = ~segToFrame.(~loopStart[t]);
         var endF   = ~segToFrame.(~loopEnd[t] + 1);
+        if(~playNodes[t].notNil) { ~playNodes[t].free };
         ~playNodes[t] = Synth(\loopPlay, [
             \bufnum,     ~buffers[t],
             \outBus,     ~outBus,
@@ -220,10 +216,10 @@
 // Recording
 // ---------------------------------------------------------------------------
 ~startRecording = { |track|
-    ~stopRecording.(track);
     var startF = ~segToFrame.(~loopStart[track]);
     var endF   = ~segToFrame.(~loopEnd[track] + 1);
     var preL   = if(~isOverdub[track]) { 1.0 } { 0.0 };
+    ~stopRecording.(track);
     ~isRecording[track] = true;
     ~recNodes[track] = Synth(\loopRec, [
         \bufnum,     ~buffers[track],
@@ -241,7 +237,7 @@
 ~stopRecording = { |track|
     if(~isRecording[track]) {
         ~recNodes[track] !? { |n| n.set(\gate, 0) };
-        ~recNodes[track]  = nil;
+        ~recNodes[track]    = nil;
         ~isRecording[track] = false;
         ~updateDisplay.();
         "Track % recording stopped".format(track).postln;
@@ -259,9 +255,7 @@
 // monome OSC handlers
 // ---------------------------------------------------------------------------
 ~setupOSC = {
-    // Button press handler
     OSCdef(\monomeGrid, { |msg|
-        // msg: [path, x, col, row, state]  (serialosc sends col, row)
         var col   = msg[1].asInteger;
         var row   = msg[2].asInteger;
         var state = msg[3].asInteger; // 1 = down, 0 = up
@@ -271,9 +265,7 @@
             // Rows 0-3: set loop start/end for each track
             { row < ~numTracks } {
                 var track = row;
-                // First press sets start, second press (if col > start) sets end
                 if(~loopStart[track] == col) {
-                    // Reset: tap same column = set single-segment loop
                     ~loopStart[track] = col;
                     ~loopEnd[track]   = col;
                 } {
@@ -284,14 +276,12 @@
                         if(~loopEnd[track] < col) { ~loopEnd[track] = col };
                     };
                 };
-                // Update playing synth range if running
                 if(~isPlaying[track] && ~playNodes[track].notNil) {
                     ~playNodes[track].set(
                         \startFrame, ~segToFrame.(~loopStart[track]),
                         \endFrame,   ~segToFrame.(~loopEnd[track] + 1)
                     );
                 };
-                // Update recording range if active
                 if(~isRecording[track] && ~recNodes[track].notNil) {
                     ~recNodes[track].set(
                         \startFrame, ~segToFrame.(~loopStart[track]),
@@ -302,7 +292,7 @@
             }
 
             // Row 4: record arm (col 0-3)
-            { row == 4 && (col < ~numTracks) } {
+            { (row == 4) && (col < ~numTracks) } {
                 var track = col;
                 if(~isRecording[track]) {
                     ~stopRecording.(track);
@@ -314,12 +304,11 @@
             // Row 5: overdub toggle (col 0-3) / clear (col 4-7)
             { row == 5 } {
                 if(col < ~numTracks) {
-                    // overdub toggle
                     ~isOverdub[col] = ~isOverdub[col].not;
                     "Track % overdub: %".format(col, ~isOverdub[col]).postln;
                     ~updateDisplay.();
                 } {
-                    if(col >= 4 && col < (4 + ~numTracks)) {
+                    if((col >= 4) && (col < (4 + ~numTracks))) {
                         ~clearTrack.(col - 4);
                     };
                 };
@@ -332,11 +321,9 @@
                     if(~transport) { ~stopTransport.() } { ~startTransport.() };
                 }
                 { col == 1 } {
-                    // Record all tracks simultaneously
                     ~numTracks.do { |t| ~startRecording.(t) };
                 }
                 { col == 7 } {
-                    // Clear all tracks
                     ~numTracks.do { |t| ~clearTrack.(t) };
                 };
             };
@@ -344,18 +331,6 @@
     }, ~monomePrefix ++ "/grid/key", recvPort: ~monomeReceivePort);
 
     "OSC handlers registered on port %".format(~monomeReceivePort).postln;
-};
-
-// ---------------------------------------------------------------------------
-// Keyboard shortcuts (for testing without monome)
-// ---------------------------------------------------------------------------
-~setupKeyboardShortcuts = {
-    "--- Keyboard Shortcuts ---".postln;
-    "  p = play/stop transport".postln;
-    "  1-4 = toggle record on track 0-3".postln;
-    "  q-r = toggle overdub track 0-3".postln;
-    "  z-v = clear track 0-3".postln;
-    "  c = clear all".postln;
 };
 
 // ---------------------------------------------------------------------------
@@ -368,19 +343,23 @@ s.waitForBoot({
     s.sync;
     ~setupOSC.();
     ~updateDisplay.();
-    ~setupKeyboardShortcuts.();
 
-    // Monitor live input (comment out if not needed)
     ~monitorNode = Synth(\inputMonitor, [\inputBus, ~inputBus, \outBus, ~outBus, \amp, 0.5]);
 
     "=== super_duper_looper ready ===".postln;
-    "monome64 expected on prefix: %".format(~monomePrefix).postln;
-    "Loop duration: % sec | Buffer: % frames".format(~loopDuration, ~bufFrames).postln;
+    "monome64 prefix: %  |  receive port: %".format(~monomePrefix, ~monomeReceivePort).postln;
+    "Loop duration: % sec  |  Buffer: % frames".format(~loopDuration, ~bufFrames).postln;
+    "".postln;
+    "--- monome64 layout ---".postln;
+    "  Row 0-3 : loop range & playhead per track".postln;
+    "  Row 4   : col 0-3 = record arm".postln;
+    "  Row 5   : col 0-3 = overdub, col 4-7 = clear track".postln;
+    "  Row 6   : col 0 = play/stop, col 1 = rec all, col 7 = clear all".postln;
 });
 )
 
 // ---------------------------------------------------------------------------
-// Cleanup (run this block separately to tear down)
+// Cleanup — run this block separately to tear down
 // ---------------------------------------------------------------------------
 (
 ~stopTransport.();
