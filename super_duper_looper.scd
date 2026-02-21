@@ -47,6 +47,8 @@
 ~loopEnd      = Array.fill(~numTracks, 7);   // loop end   segment 0-7
 ~transport    = false; // global play state
 ~ledState     = Array.fill(8, { Array.fill(8, 0) }); // [row][col]
+~heldCol      = Array.fill(~numTracks, nil);          // held column per track (mlr range set)
+~rangeSet     = Array.fill(~numTracks, false);        // true once 2nd button sets a range
 
 // ---------------------------------------------------------------------------
 // Allocate Buffers
@@ -98,6 +100,25 @@
 ~frameToSeg = { |frame| (frame / ~bufFrames * ~numCols).asInteger.clip(0, ~numCols - 1) };
 
 // ---------------------------------------------------------------------------
+// Playback restart helper — jump a track to its current loopStart
+// ---------------------------------------------------------------------------
+~restartPlay = { |track|
+    var startF = ~segToFrame.(~loopStart[track]);
+    var endF   = ~segToFrame.(~loopEnd[track] + 1);
+    ~playPos[track] = ~loopStart[track];
+    if(~transport && ~isPlaying[track]) {
+        ~playNodes[track] !? { ~playNodes[track].set(\gate, 0) };
+        ~playNodes[track] = Synth(\loopPlay, [
+            \bufnum,     ~buffers[track],
+            \outBus,     ~outBus,
+            \startFrame, startF,
+            \endFrame,   endF,
+            \amp,        0.8
+        ]);
+    };
+};
+
+// ---------------------------------------------------------------------------
 // monome LED helpers
 // ---------------------------------------------------------------------------
 ~ledSet = { |row, col, val|
@@ -126,10 +147,13 @@
     var odRow  = Array.fill(~numCols, 0);
     var trRow  = Array.fill(~numCols, 0);
 
-    // Rows 0-3: mlr-style — playhead LED always on; blinks through columns when playing
+    // Rows 0-3: loop range fully lit, playhead = dark spot moving through range
     ~numTracks.do { |track|
-        var row = Array.fill(~numCols, 0);
-        row[~playPos[track]] = 1;
+        var row = Array.fill(~numCols, { |col|
+            if((col >= ~loopStart[track]) && (col <= ~loopEnd[track])) {
+                if(col == ~playPos[track]) { 0 } { 1 }
+            } { 0 }
+        });
         ~ledRow.(track, row);
     };
 
@@ -320,68 +344,63 @@
         var row   = msg[2].asInteger;
         var state = msg[3].asInteger; // 1 = down, 0 = up
 
-        if(state == 1) {
-            case
-            // Rows 0-3: mlr-style — jump playhead to pressed column
-            { row < ~numTracks } {
-                var track  = row;
-                var startF = ~segToFrame.(col);
-                var endF   = ~bufFrames;      // always play to end of buffer
-                ~playPos[track]    = col;
-                ~loopStart[track]  = col;
-                ~loopEnd[track]    = ~numCols - 1;
-                if(~transport && ~isPlaying[track]) {
-                    ~playNodes[track] !? { ~playNodes[track].set(\gate, 0) };
-                    ~playNodes[track] = Synth(\loopPlay, [
-                        \bufnum,     ~buffers[track],
-                        \outBus,     ~outBus,
-                        \startFrame, startF,
-                        \endFrame,   endF,
-                        \amp,        0.8
-                    ]);
-                };
-                if(~isRecording[track] && ~recNodes[track].notNil) {
-                    ~recNodes[track].set(\startFrame, startF, \endFrame, endF);
+        case
+        // Rows 0-3: mlr-style loop range control (handles press AND release)
+        { row < ~numTracks } {
+            var track = row;
+            if(state == 1) {
+                if(~heldCol[track].isNil) {
+                    // First press: jump to col, play col → end of row
+                    ~heldCol[track]   = col;
+                    ~loopStart[track] = col;
+                    ~loopEnd[track]   = ~numCols - 1;
+                    ~restartPlay.(track);
+                } {
+                    // Second press while first held: set range [min, max]
+                    var a = ~heldCol[track];
+                    ~loopStart[track] = min(a, col);
+                    ~loopEnd[track]   = max(a, col);
+                    ~rangeSet[track]  = true;
+                    ~restartPlay.(track);
                 };
                 ~updateDisplay.();
-            }
-
-            // Row 4: record arm (col 0-3)
-            { (row == 4) && (col < ~numTracks) } {
-                var track = col;
-                if(~isRecording[track]) {
-                    ~stopRecording.(track);
-                } {
-                    ~startRecording.(track);
-                };
-            }
-
-            // Row 5: overdub toggle (col 0-3) / clear (col 4-7)
-            { row == 5 } {
-                if(col < ~numTracks) {
-                    ~isOverdub[col] = ~isOverdub[col].not;
-                    "Track % overdub: %".format(col, ~isOverdub[col]).postln;
-                    ~updateDisplay.();
-                } {
-                    if((col >= 4) && (col < (4 + ~numTracks))) {
-                        ~clearTrack.(col - 4);
-                    };
-                };
-            }
-
-            // Row 6: global transport
-            { row == 6 } {
-                case
-                { col == 0 } {
-                    if(~transport) { ~stopTransport.() } { ~startTransport.() };
-                }
-                { col == 1 } {
-                    ~numTracks.do { |t| ~startRecording.(t) };
-                }
-                { col == 7 } {
-                    ~numTracks.do { |t| ~clearTrack.(t) };
+            } {
+                // Release: clear held state
+                if(~heldCol[track] == col) {
+                    ~heldCol[track]  = nil;
+                    ~rangeSet[track] = false;
                 };
             };
+        }
+
+        // Row 4: record arm (col 0-3)
+        { (state == 1) && (row == 4) && (col < ~numTracks) } {
+            if(~isRecording[col]) {
+                ~stopRecording.(col);
+            } {
+                ~startRecording.(col);
+            };
+        }
+
+        // Row 5: overdub toggle (col 0-3) / clear track (col 4-7)
+        { (state == 1) && (row == 5) } {
+            if(col < ~numTracks) {
+                ~isOverdub[col] = ~isOverdub[col].not;
+                "Track % overdub: %".format(col, ~isOverdub[col]).postln;
+                ~updateDisplay.();
+            } {
+                if((col >= 4) && (col < (4 + ~numTracks))) {
+                    ~clearTrack.(col - 4);
+                };
+            };
+        }
+
+        // Row 6: global transport
+        { (state == 1) && (row == 6) } {
+            case
+            { col == 0 } { if(~transport) { ~stopTransport.() } { ~startTransport.() } }
+            { col == 1 } { ~numTracks.do { |t| ~startRecording.(t) } }
+            { col == 7 } { ~numTracks.do { |t| ~clearTrack.(t) } };
         };
     }, ~monomePrefix ++ "/grid/key", recvPort: ~monomeReceivePort);
 
