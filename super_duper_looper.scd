@@ -28,9 +28,10 @@
 
 // monome OSC ports
 ~monomeReceivePort = 57121; // local port this app listens on
-~monomeSendPort    = 12002; // serialosc device port
+~monomeSendPort    = 12002; // serialosc port (auto-updated to device port at boot)
 ~monomeAddr        = NetAddr("127.0.0.1", ~monomeSendPort);
 ~monomePrefix      = "/monome"; // change to match your device prefix
+~monomeConnected   = false;    // set true once serialosc reports a device
 
 // ---------------------------------------------------------------------------
 // State
@@ -126,12 +127,10 @@
     var odRow  = Array.fill(~numCols, 0);
     var trRow  = Array.fill(~numCols, 0);
 
-    // Rows 0-3: mlr-style — single moving LED shows playhead when transport on
+    // Rows 0-3: mlr-style — playhead LED always on; blinks through columns when playing
     ~numTracks.do { |track|
         var row = Array.fill(~numCols, 0);
-        if(~transport && ~isPlaying[track]) {
-            row[~playPos[track]] = 1;
-        };
+        row[~playPos[track]] = 1;
         ~ledRow.(track, row);
     };
 
@@ -257,21 +256,47 @@
 // Queries serialosc (port 12002) for connected monome devices, then tells
 // the device to send button events to our receive port and sets the prefix.
 // ~monomeAddr is updated automatically when the device responds.
+//
+// If auto-discovery fails (no "monome found" message in the SC console),
+// call ~connectMonome.(port) manually with the port from monome_setup.scd.
+~connectMonome = { |devicePort|
+    var deviceAddr = NetAddr("127.0.0.1", devicePort);
+    ~monomeAddr      = deviceAddr;
+    ~monomeConnected = true;
+    deviceAddr.sendMsg("/sys/port",   ~monomeReceivePort);
+    deviceAddr.sendMsg("/sys/prefix", ~monomePrefix);
+    // small delay so device processes /sys/prefix before LED commands arrive
+    SystemClock.sched(0.05, { ~updateDisplay.(); nil });
+    "monome manually connected on port %".format(devicePort).postln;
+};
+
 ~setupMonome = {
+    // explicitly open the receive port — recvPort: in OSCdef alone is not
+    // always sufficient in all SC versions
+    thisProcess.openUDPPort(~monomeReceivePort);
+
     OSCdef(\serialoscDevice, { |msg|
         var devicePort = msg[3].asInteger;
-        var deviceAddr = NetAddr("127.0.0.1", devicePort);
         "monome found: type=%, port=%".format(msg[2], devicePort).postln;
-        ~monomeAddr = deviceAddr;
-        deviceAddr.sendMsg("/sys/port",   ~monomeReceivePort);
-        deviceAddr.sendMsg("/sys/prefix", ~monomePrefix);
-        // re-draw LEDs now that we have the real device address
-        ~updateDisplay.();
+        ~connectMonome.(devicePort);
         OSCdef(\serialoscDevice).free;
     }, "/serialosc/device", recvPort: ~monomeReceivePort);
 
-    NetAddr("127.0.0.1", 12002).sendMsg("/serialosc/list", "127.0.0.1", ~monomeReceivePort);
-    "querying serialosc for monome devices...".postln;
+    // query now, and retry once after 2 s in case serialosc is slow to respond
+    fork {
+        NetAddr("127.0.0.1", 12002).sendMsg("/serialosc/list", "127.0.0.1", ~monomeReceivePort);
+        "querying serialosc for monome devices (port %)...".format(~monomeReceivePort).postln;
+        2.0.wait;
+        if(~monomeConnected.not) {
+            "retrying serialosc query...".postln;
+            NetAddr("127.0.0.1", 12002).sendMsg("/serialosc/list", "127.0.0.1", ~monomeReceivePort);
+            2.0.wait;
+            if(~monomeConnected.not) {
+                "WARNING: no monome device found. Run monome_setup.scd to get the device port,".postln;
+                "then call:  ~connectMonome.(port)  to connect manually.".postln;
+            };
+        };
+    };
 };
 
 // ---------------------------------------------------------------------------
