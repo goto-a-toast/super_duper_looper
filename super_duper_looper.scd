@@ -142,21 +142,22 @@
                            delayAmt  = 0.0, delayTime = 0.35, delayFeedback = 0.5,
                            crushAmt  = 0.0,
                            amp = 1.0|
-        var sig = In.ar(inBus, 1);
+        // All vars declared upfront (SC requires var declarations before any statements)
+        var sig, step, crushed, delayed, revved;
+        sig = In.ar(inBus, 1);
 
         // Bit crush ──────────────────────────────────────────────────────────
-        // step = 1/16 ≈ 4-bit quantisation when fully engaged
-        var step    = 1.0 / 16;
-        var crushed = (sig / step).round * step;
-        sig = XFade2.ar(sig, crushed, crushAmt * 2 - 1);
+        step    = 1.0 / 16;   // ≈ 4-bit quantisation when fully engaged
+        crushed = (sig / step).round * step;
+        sig     = XFade2.ar(sig, crushed, crushAmt * 2 - 1);
 
         // Delay (CombL with feedback, parallel mix) ──────────────────────────
-        var delayed = CombL.ar(sig, 2.0, delayTime, delayFeedback * 10);
-        sig = sig + (delayed * delayAmt * 0.7);
+        delayed = CombL.ar(sig, 2.0, delayTime, delayFeedback * 10);
+        sig     = sig + (delayed * delayAmt * 0.7);
 
         // Reverb (FreeVerb) ──────────────────────────────────────────────────
-        var revved = FreeVerb.ar(sig, mix: 0.7, room: 0.85, damp: 0.2);
-        sig = XFade2.ar(sig, revved, reverbAmt * 2 - 1);
+        revved = FreeVerb.ar(sig, mix: 0.7, room: 0.85, damp: 0.2);
+        sig    = XFade2.ar(sig, revved, reverbAmt * 2 - 1);
 
         Out.ar(outBus, sig.dup(2) * amp);
     }).add;
