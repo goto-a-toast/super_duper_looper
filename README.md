@@ -4,19 +4,19 @@ SuperCollider looper for guitar / external audio input, controlled via **monome6
 
 ## Features
 
-- **4 tracks**, each with an independent audio buffer
-- **mlr-style loop region control**: tap buttons on the grid to set loop start/end per track
+- **4 tracks** with independent audio buffers
+- **mlr-style loop region control** — tap buttons to set loop start/end per track
 - **Overdub** mode per track
 - **Record arm** per track (or all at once)
 - **Clear** per track or all
-- Live **input monitor** (processed through the effects chain)
+- Live **input monitor** through the effects chain
 - **Granular mode** per track — slow-scan GrainBuf with position jitter
 - **Global effects chain** — reverb, delay, bit crush
-- **Amplitude-driven FX** — input level dynamically boosts reverb send + grain spread
-- **Onset-triggered recording** — play a note to auto-start recording on armed tracks
+- **Amplitude-driven FX** — input level dynamically boosts reverb send and grain spread
+- **Onset-triggered recording** — audio attack auto-starts recording on armed tracks
 - **Reverse playback** per track
 - **Variable speed** — 0.5×, 1×, or 2× global speed multiplier
-- Keyboard shortcuts for testing without a monome
+- **Keyboard shortcuts** for testing without a monome
 
 ---
 
@@ -40,12 +40,12 @@ Make sure `serialosc` is running and your monome64 is connected via USB.
 
 Open `monome_setup.scd` in SuperCollider and run the blocks in order:
 
-1. **Block 1** – queries serialosc for connected devices → note the reported port number.
-2. **Block 2** – replace `devicePort` with the port from step 1, then run to get the prefix string.
+1. **Block 1** — queries serialosc for connected devices → note the reported port number.
+2. **Block 2** — replace `devicePort` with the port from step 1, then run to get the prefix string.
 
 ### 3. Configure `super_duper_looper.scd`
 
-Update the following variables near the top of the file:
+Update the variables near the top of the file:
 
 ```supercollider
 ~loopDuration = 4.0;        // loop length in seconds
@@ -64,11 +64,11 @@ Select the **first block** in `super_duper_looper.scd` and evaluate (`Cmd+Enter`
 ## Signal Flow
 
 ```
-[ampAnalysis]                           ──► ~ampBus (kr)
-[onsetDetect]                           ──► SendReply '/onset' ──► language
+[ampAnalysis]                              ──► ~ampBus (kr)
+[onsetDetect]                              ──► SendReply '/onset' ──► language
 
-[inputMonitor / loopPlay / grainPlay]   ──► ~mixBus (ar mono)
-                                        ──► [globalFX]  ──► hw out (stereo)
+[inputMonitor / loopPlay / grainPlay]      ──► ~mixBus (ar mono)
+                                           ──► [globalFX]  ──► hw out (stereo)
 
 globalFX  reads ~ampBus when amp-fx mode is on
 grainPlay reads ~ampBus when amp-fx mode is on
@@ -146,12 +146,12 @@ Row 7: [G0] [G1] [G2] [G3] [RV]  [DL]  [BC]  ·    ← Granular | Effects
 ~grainPitch  = 1.0;   // pitch ratio (0.5 = octave down, 2.0 = octave up)
 ```
 
-**Reverse** (row 6 col 2-5 or `g`–`k`): scans backward through the loop region.
-**Speed** (row 4 col 6-7 or `-`/`=`): multiplies the scan rate.
+**Reverse** (row 6 col 2–5 or `g`–`k`): scans backward through the loop region.
+**Speed** (row 4 col 6–7 or `-`/`=`): multiplies the scan rate.
 
 ---
 
-## Onset-Triggered Recording (Phase 3)
+## Onset-Triggered Recording
 
 1. Press **row 4 col 4** to enable onset-rec mode (lit LED).
 2. Press **row 4 col 0–3** to arm the tracks you want to record on.
@@ -168,7 +168,7 @@ Sensitivity is controlled by `~onsetThreshold` (0 = most sensitive, 1 = least). 
 
 ---
 
-## Amplitude-Driven FX (Phase 3)
+## Amplitude-Driven FX
 
 Press **row 4 col 5** (or `m`) to enable amp-fx mode.
 
@@ -179,7 +179,7 @@ Combine with reverb toggle off for pure dynamic reverb (no constant wash).
 
 ---
 
-## Reverse & Speed (Phase 4)
+## Reverse & Speed
 
 | Control | Action |
 |---|---|
@@ -188,7 +188,7 @@ Combine with reverb toggle off for pure dynamic reverb (no constant wash).
 | Row 4 col 7 | Double speed (2×) — press again to return to 1× |
 
 Speed affects:
-- `loopPlay`: Phasor rate multiplied.
+- `loopPlay`: phasor rate multiplied.
 - `grainPlay`: scan phasor rate multiplied (grain pitch unchanged).
 
 ---
@@ -204,7 +204,8 @@ Evaluate the **keyboard shortcuts block** (last block) after booting; keep the s
 | `q` `w` `e` `r` | Overdub T0–T3 |
 | `a` `s` `d` `f` | Granular mode T0–T3 |
 | `g` `h` `j` `k` | Reverse T0–T3 |
-| `z` `x` `v` `b` | Clear T0–T3 · `c` = clear all |
+| `z` `x` `v` `b` | Clear T0–T3 |
+| `c` | Clear all |
 | `-` / `=` | 0.5× / 2× speed (press again to return to 1×) |
 | `[` `]` `\` | Reverb / Delay / Bit crush |
 | `o` | Onset-rec mode |
