@@ -97,6 +97,13 @@ if(File.exists(~aSamplePath).not) {
 ~genScheduler       = nil;
 ~activityRoutine    = nil;
 
+// tilt (accelerometer) — smoothed, drives pan / density / reverb live
+~tiltEnabled        = false;          // toggled by row 6 col... (and auto on connect)
+~tiltPanBias        = 0.0;            // -1..1, shifts voice pan center (X axis)
+~tiltDensityMod     = 1.0;            // 0.5..2.0, multiplies scheduler density (Y axis)
+~tiltRevMod         = nil;            // 0..1 reverb override, nil = manual control (Z axis)
+~tiltRaw            = [0, 0, 0];      // last raw x,y,z for the GUI
+
 ~aWindow            = nil;            // status GUI (display only)
 ~statusText         = nil;
 
@@ -384,7 +391,8 @@ if(File.exists(~aSamplePath).not) {
     src = src ?? { ~chooseSource.() };
     if(src.notNil) {
         pos  = pos ?? { rrand(0.0, 0.85) };
-        pan  = rrand(-0.8, 0.8);
+        // tilt X shifts the random pan center left/right
+        pan  = (rrand(-0.5, 0.5) + ~tiltPanBias).clip(-1, 1);
         amp  = exprand(0.08, 0.32);
         dur  = exprand(4.0, 12.0);
         args = [\bufnum, src, \outBus, ~mixBus.index, \pos, pos, \pan, pan,
@@ -434,7 +442,8 @@ if(File.exists(~aSamplePath).not) {
                 if(~voiceGroup.notNil) {
                     ~spawnVoice.();
                 };
-                (exprand(1.5, 6.0) / ~density).wait;
+                // tilt Y continuously scales density between the 1/2/3 steps
+                (exprand(1.5, 6.0) / (~density * ~tiltDensityMod)).wait;
             } {
                 0.5.wait;
             };
@@ -581,6 +590,54 @@ if(File.exists(~aSamplePath).not) {
 };
 
 // ---------------------------------------------------------------------------
+// Tilt (accelerometer) — enable on device, map smoothed X/Y/Z to params
+// ---------------------------------------------------------------------------
+// raw axis values are roughly 0..255 with ~127 at rest; normalize to -1..1
+~tiltNorm = { |raw| ((raw - 127) / 127.0).clip(-1, 1) };
+
+~enableTilt = { |on|
+    ~tiltEnabled = on;
+    if(~aMonomeConnected) {
+        // tell serialosc to start/stop streaming /monome/tilt for sensor 0
+        ~aMonomeAddr.sendMsg(~aMonomePrefix ++ "/tilt/set", 0, on.binaryValue);
+    };
+    if(on.not) {
+        // release tilt's hold on the parameters so manual control resumes
+        ~tiltPanBias    = 0.0;
+        ~tiltDensityMod = 1.0;
+        if(~tiltRevMod.notNil) {
+            ~tiltRevMod = nil;
+            ~fxNode !? { ~fxNode.set(\revAmt, if(~fxReverb) { 0.7 } { 0 }) };
+        };
+    };
+    ~updateDisplay.();
+    "tilt: %".format(if(on) { "ON" } { "off" }).postln;
+};
+
+~toggleTilt = { ~enableTilt.(~tiltEnabled.not) };
+
+// called for each /monome/tilt message; one-pole smoothing tames hand jitter
+~tiltSmooth = 0.2;   // 0..1, lower = smoother/slower
+~handleTilt = { |x, y, z|
+    var nx, ny, nz, k;
+    ~tiltRaw = [x, y, z];
+    if(~tiltEnabled) {
+        k  = ~tiltSmooth;
+        nx = ~tiltNorm.(x);
+        ny = ~tiltNorm.(y).linlin(-1, 1, 0.5, 2.0);
+        nz = ~tiltNorm.(z).linlin(-1, 1, 0.0, 1.0);
+        // X (left/right): pan center, full -1..1
+        ~tiltPanBias    = (~tiltPanBias    * (1 - k)) + (nx * k);
+        // Y (front/back): density multiplier 0.5..2.0 (rest = ~1.0)
+        ~tiltDensityMod = (~tiltDensityMod * (1 - k)) + (ny * k);
+        // Z (twist): reverb amount 0..1, overrides manual reverb while tilting
+        ~tiltRevMod     = ((~tiltRevMod ? nz) * (1 - k)) + (nz * k);
+        ~fxNode !? { ~fxNode.set(\revAmt, ~tiltRevMod) };
+        ~updateGui !? { ~updateGui.() };
+    };
+};
+
+// ---------------------------------------------------------------------------
 // serialosc device registration (copied from super_duper_looper.scd pattern)
 // ---------------------------------------------------------------------------
 ~connectMonome = { |devicePort|
@@ -707,6 +764,11 @@ if(File.exists(~aSamplePath).not) {
         };
     }, ~aMonomePrefix ++ "/grid/key", recvPort: ~aMonomeReceivePort);
 
+    // tilt: /monome/tilt n x y z  (n = sensor index, x/y/z = accelerometer)
+    OSCdef(\aMonomeTilt, { |msg|
+        ~handleTilt.(msg[2].asInteger, msg[3].asInteger, msg[4].asInteger);
+    }, ~aMonomePrefix ++ "/tilt", recvPort: ~aMonomeReceivePort);
+
     "ambient OSC handlers registered on port %".format(~aMonomeReceivePort).postln;
 };
 
@@ -733,8 +795,11 @@ if(File.exists(~aSamplePath).not) {
                 ++ "volume   : %\n".format(~masterAmp)
                 ++ "snapshot : %   (* = recorded)\n".format(snaps)
                 ++ "samples  : % loaded\n".format(~sourcePool.size)
-                ++ "monome   : %".format(
+                ++ "monome   : %\n".format(
                     if(~aMonomeConnected) { "connected" } { "not found" })
+                ++ "tilt     : %  X:% Y:% Z:%".format(
+                    if(~tiltEnabled) { "ON " } { "off" },
+                    ~tiltRaw[0], ~tiltRaw[1], ~tiltRaw[2])
             );
         };
     }.defer;
@@ -742,9 +807,9 @@ if(File.exists(~aSamplePath).not) {
 
 ~makeGui = {
     ~aWindow !? { if(~aWindow.isClosed.not) { ~aWindow.close } };
-    ~aWindow = Window("ambient_machine status", Rect(60, 60, 380, 220))
+    ~aWindow = Window("ambient_machine status", Rect(60, 60, 400, 250))
         .alwaysOnTop_(true);
-    ~statusText = StaticText(~aWindow, Rect(14, 10, 352, 200))
+    ~statusText = StaticText(~aWindow, Rect(14, 10, 372, 228))
         .font_(Font("Menlo", 13))
         .align_(\topLeft);
     ~aWindow.onClose = { ~aWindow = nil; ~statusText = nil };
@@ -799,6 +864,11 @@ s.waitForBoot({
     "  Row 5   : density (col 0-2) | BURST (col 3) | source bias (col 4-7)".postln;
     "  Row 6   : ▶/■  SNAP  DRONE  [S0 S1 S2 S3 audition]  PANIC".postln;
     "  Row 7   : REV DLY SAT SHIMMER | master volume (col 4-7)".postln;
+    "".postln;
+    "--- tilt (accelerometer) ---".postln;
+    "  evaluate  ~toggleTilt.()  to steer hands-free:".postln;
+    "    X tilt L/R  -> pan center    Y tilt F/B -> density".postln;
+    "    Z twist     -> reverb amount (overrides manual reverb while on)".postln;
 });
 )
 
@@ -808,6 +878,7 @@ s.waitForBoot({
 // ---------------------------------------------------------------------------
 (
 ~stopGen.();
+~enableTilt.(false);
 ~activityRoutine !? { ~activityRoutine.stop };
 ~aWindow         !? { { ~aWindow.close }.defer };
 ~liveCaptureNode !? { ~liveCaptureNode.free };
@@ -820,6 +891,7 @@ s.waitForBoot({
 ~snapshotBuffers.do { |b| b !? { b.free } };
 ~sourcePool.do      { |b| b !? { b.free } };
 OSCdef(\aMonomeGrid).free;
+OSCdef(\aMonomeTilt).free;
 OSCdef(\aSerialoscDevice).free;
 ~clearLeds.();
 "ambient_machine stopped".postln;
