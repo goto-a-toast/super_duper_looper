@@ -238,36 +238,55 @@ if(File.exists(~aSamplePath).not) {
 // Sample bank loader
 // ---------------------------------------------------------------------------
 ~loadSamples = {
-    var pn, allFiles, files;
+    var pn, allFiles, files, exts;
+    exts = #["wav", "aif", "aiff", "aifc", "flac", "ogg", "caf"];
+    "sample path: %".format(~aSamplePath).postln;
     if(File.exists(~aSamplePath).not) {
         "WARNING: sample folder not found: %".format(~aSamplePath).postln;
+        "         edit ~aSamplePath at the top of this file".postln;
         "         running with live input only".postln;
     } {
         pn       = PathName(~aSamplePath);
-        allFiles = pn.files;
+        allFiles = pn.deepFiles;   // includes subfolders
         files    = allFiles.select { |f|
-            #["wav","aif","aiff","flac"].includes(f.extension.toLower)
+            exts.includes(f.extension.toLower)
         };
         if(files.size == 0) {
             "no loadable samples in % (live input only)".format(~aSamplePath).postln;
             if(allFiles.size > 0) {
-                "folder contains % file(s) but none end in .wav/.aif/.aiff/.flac:"
-                    .format(allFiles.size).postln;
+                "folder contains % file(s) but none end in % :"
+                    .format(allFiles.size, exts).postln;
                 allFiles.do { |f| ("  " ++ f.fileName).postln };
+                "NOTE: SuperCollider cannot read .mp3/.m4a — convert to wav/aiff.".postln;
             };
         } {
             "loading % samples from % ...".format(files.size, ~aSamplePath).postln;
             files.do { |f|
                 // voices expect mono buffers (GrainBuf / PlayBuf.ar(1, ...)),
-                // so read only the first channel of each file
-                var buf = Buffer.readChannel(s, f.fullPath, channels: [0],
+                // so read only the first channel of each file.
+                // pool is filled inside the action so failed reads never
+                // leave silent dud buffers in ~sourcePool
+                Buffer.readChannel(s, f.fullPath, channels: [0],
                     action: { |b|
-                        "  loaded: %  (% s)".format(f.fileName,
-                            (b.numFrames / b.sampleRate).round(0.1)).postln;
+                        if(b.numFrames.notNil and: { b.numFrames > 0 }) {
+                            ~sourcePool = ~sourcePool.add(b);
+                            "  loaded: %  (% s)".format(f.fileName,
+                                (b.numFrames / b.sampleRate).round(0.1)).postln;
+                        } {
+                            "  FAILED: %  (unreadable or empty)".format(f.fileName).postln;
+                        };
                         ~updateGui !? { ~updateGui.() };
                     });
-                ~sourcePool = ~sourcePool.add(buf);
             };
+            // summary after the async reads have had time to finish
+            SystemClock.sched(3.0, {
+                "sample load result: % of % file(s) in pool"
+                    .format(~sourcePool.size, files.size).postln;
+                if(~sourcePool.size < files.size) {
+                    "some files failed — see server errors above".postln;
+                };
+                nil
+            });
         };
     };
 };
