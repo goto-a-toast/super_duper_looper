@@ -34,7 +34,7 @@
 ~aLiveRollSeconds   = 30;
 ~aSnapshotSeconds   = 4;
 ~aMaxConcurrent     = 12;             // safety cap
-~aSamplePath        = "/home/user/super_duper_looper/samples";
+~aSamplePath        = PathName(thisProcess.nowExecutingPath).parentPath +/+ "samples";
 
 // monome OSC ports (same convention as super_duper_looper.scd)
 ~aMonomeReceivePort = 57122;          // distinct from the looper's 57121
@@ -180,14 +180,16 @@
     // Global FX chain: in(stereo) → delay → reverb (+shimmer feedback) → saturation → out
     SynthDef(\aFX, { |inBus = 0, outBus = 0, revAmt = 0.7, delAmt = 0.5,
                       satAmt = 0, shimAmt = 0, masterAmp = 0.8|
-        var in, dly, fb, rev, sat, sig;
+        var in, dly, fb, dry, rev, sat, sig;
         in  = In.ar(inBus, 2);
         dly = CombL.ar(in, 4.0, 3.5, 8) * delAmt;
         fb  = LocalIn.ar(2) * shimAmt;          // octave-up reverb feedback
         sig = in + dly + fb;
-        rev = FreeVerb2.ar(sig[0], sig[1], mix: revAmt, room: 0.9, damp: 0.2);
+        dry = sig;
+        // FreeVerb2 mix:0 can output silence in some SC builds, so blend manually
+        rev = FreeVerb2.ar(sig[0], sig[1], mix: 1.0, room: 0.9, damp: 0.2);
         LocalOut.ar(PitchShift.ar(rev, 0.23, 2.0, 0, 0.01).softclip * 0.4);
-        sig = rev;
+        sig = (dry * (1 - revAmt)) + (rev * revAmt);
         sat = (sig * (1 + (satAmt * 4))).tanh;
         sig = SelectX.ar(satAmt, [sig, sat]);
         Out.ar(outBus, sig.softclip * masterAmp);
