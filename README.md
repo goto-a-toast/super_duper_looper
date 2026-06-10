@@ -118,70 +118,81 @@ Row 7: [G0][G1][G2][G3][RV] [DL] [BC]  ·    ← グラニュラー | エフェ�
 
 > エンジンはスタートするまで音を出しません。サンプルのロードや FX の初期化は自動で行われます。
 
-#### monome64 レイアウト
+#### monome64 レイアウト（全 64 ボタンに機能あり）
 
 ```
 Col:    0    1    2    3    4    5    6    7
         ──────────────────────────────────────
-Row 0:  [ Voice 0 アクティビティメーター        ]
-Row 1:  [ Voice 1 アクティビティメーター        ]
-Row 2:  [ Voice 2 アクティビティメーター        ]
-Row 3:  [ Voice 3 アクティビティメーター        ]
+Row 0:  [ Granular パッド ＋ アクティビティメーター ]
+Row 1:  [ Freeze   パッド ＋ アクティビティメーター ]
+Row 2:  [ Reverse  パッド ＋ アクティビティメーター ]
+Row 3:  [ Pitch    パッド ＋ アクティビティメーター ]
         ──────────────────────────────────────
-Row 4:  [G ][F ][R ][P ][--][--][--][--]   ← ボイスタイプ有効/無効
-Row 5:  [D1][D2][D3][--][SB][SB][SB][SB]  ← 密度 1/2/3 ＋ ソースバイアス
-Row 6:  [▶/■][SNAP][--][--][--][--][--][PANIC] ← トランスポート / スナップショット
-Row 7:  [RV][DL][SAT][--][--][--][--][--]  ← グローバル FX
+Row 4:  [G ][F ][R ][P ][P1][P2][P3][P4]  ← ボイス有効/無効 ＋ ピッチパレット
+Row 5:  [D1][D2][D3][BST][SB][SB][SB][SB] ← 密度 / バースト / ソースバイアス
+Row 6:  [▶/■][SNAP][DRN][S0][S1][S2][S3][PANIC] ← トランスポート / ドローン / スロット
+Row 7:  [RV][DL][SAT][SHM][V1][V2][V3][V4] ← FX ＋ マスター音量
 ```
 
-**Row 0–3（読み取り専用）**  
-ボイスが発火するたびに点灯し、時間とともにフェードします。生成活動の視覚的なフィードバックです。
+**Row 0–3（パッド ＆ メーター）**  
+ボイスが発火するたびに点灯し、時間とともにフェードするメーターであると同時に、**押すと手動でボイスを発音できるパッド**です。行 = ボイスタイプ（上から Granular / Freeze / Reverse / Pitch）、**列 = バッファ内の再生位置**（左端 = 先頭、右端 = 末尾）。エンジン停止中でも、無効化したボイスタイプでも発音できます。自律生成に手で「合いの手」を入れる感覚で使えます。
 
-**Row 4（ボイスタイプ切替）**
+**Row 4（ボイスタイプ切替 ＆ ピッチパレット）**
 
-| ボタン | ボイスタイプ | 内容 |
-|---|---|---|
-| Col 0 | **G** Granular | グラニュラー合成（GrainBuf） |
-| Col 1 | **F** Freeze | スペクトル・フリーズ（PV_Freeze） |
-| Col 2 | **R** Reverse | バッファの逆再生 |
-| Col 3 | **P** Pitch | ピッチシフト再生 |
+| ボタン | 動作 |
+|---|---|
+| Col 0 | **G** Granular 有効/無効（GrainBuf） |
+| Col 1 | **F** Freeze 有効/無効（PV_Freeze） |
+| Col 2 | **R** Reverse 有効/無効（逆再生） |
+| Col 3 | **P** Pitch 有効/無効（ピッチシフト再生） |
+| Col 4 | パレット **free**（0.5〜2 倍を自由に選択） |
+| Col 5 | パレット **octaves**（オクターブのみ） |
+| Col 6 | パレット **fifths**（完全 5 度中心の協和的な響き） |
+| Col 7 | パレット **shimmer**（1〜2 オクターブ上へ。きらびやか） |
 
-点灯 = 有効。すべて消すと音が出なくなります（少なくとも 1 つは ON にしてください）。
+ピッチパレットは Pitch / Granular ボイスが選ぶ再生レートのセットです（常に 1 つ点灯）。
 
-**Row 5（密度 ＆ ソースバイアス）**
+**Row 5（密度 / バースト / ソースバイアス）**
 
 | ボタン | 動作 |
 |---|---|
 | Col 0 | 密度 **1**（遅い、平均間隔 約 4 秒） |
 | Col 1 | 密度 **2**（中程度、約 2.5 秒） |
 | Col 2 | 密度 **3**（高密度、約 1 秒） |
+| Col 3 | **BURST** — 3〜5 ボイスを一斉に発音（盛り上げたい瞬間に） |
 | Col 4 | ソースバイアス 0（ライブ入力のみ） |
 | Col 5 | ソースバイアス 1 |
 | Col 6 | ソースバイアス 2 |
 | Col 7 | ソースバイアス 3（サンプルのみ） |
 
-**Row 6（トランスポート）**
+**Row 6（トランスポート / ドローン / スナップショット）**
 
 | ボタン | 動作 |
 |---|---|
 | Col 0 | エンジン **スタート / ストップ** |
-| Col 1 | **SNAP** — 今から 4 秒間ライブ入力をキャプチャ（次のボイス素材として使用） |
-| Col 7 | **PANIC** — 現在鳴っている全ボイスを即時停止 |
+| Col 1 | **SNAP** — 今から 4 秒間ライブ入力を次のスロットにキャプチャ |
+| Col 2 | **DRONE** — 持続フリーズドローンの ON/OFF（OFF で 10 秒かけてフェードアウト） |
+| Col 3–6 | スナップショットスロット 0–3。点灯 = 録音済み。**押すと試聴**（そのスロットからグラニュラーボイスを発音） |
+| Col 7 | **PANIC** — 現在鳴っている全ボイス（ドローン含む）を即時停止 |
 
-**Row 7（グローバル FX）**
+**Row 7（グローバル FX ＆ マスター音量）**
 
 | ボタン | 動作 |
 |---|---|
 | Col 0 | **リバーブ** ON/OFF（大きなホール系） |
 | Col 1 | **ディレイ** ON/OFF（3.5 秒ロングディレイ、フィードバックあり） |
 | Col 2 | **サチュレーション** ON/OFF（ソフトな歪み） |
+| Col 3 | **シマー** ON/OFF（リバーブにオクターブ上のフィードバック。天上系の輝き） |
+| Col 4–7 | マスター音量スライダー（0.4 / 0.6 / 0.8 / 1.0、常に 1 つ点灯） |
 
 #### 演奏のヒント
 
 - **Freeze + Reverb ON**: 一瞬の音が空間に溶ける、持続的なドローンに。
-- **Granular + Density 3**: 音の霧。ループ素材を細かく刻んだ雲状テクスチャ。
-- **SNAP してから Pitch**: 演奏した 4 秒をピッチシフトで変容させて空間に流す。
-- **Density 1 + Reverse**: まばらに逆再生が現れる、夢の中のような空間。
+- **DRONE + シマー ON**: 土台のドローンの上にオクターブ上の輝きが降り積もる、定番のアンビエント空間。
+- **パッド演奏**: Row 0–3 を直接叩いて、自律生成に手動でフレーズを差し込む。列で再生位置を狙えるので「あの部分だけ」を鳴らせる。
+- **SNAP → スロット試聴 → Pitch パレット shimmer**: 演奏した 4 秒を高音域へ変容させて空間に流す。
+- **BURST + Density 1**: 普段はまばらに、ここぞという所で BURST。緩急が生まれる。
+- **Granular + Density 3 + パレット octaves**: 音の霧がオクターブで積層するクラウドテクスチャ。
 - **Source Bias 0（ライブのみ）**: 今弾いている音がそのまま素材になる。インタラクティブなアンビエント。
 - ソースバイアスを中間（Col 5–6）にすると、ライブ入力とサンプルが混在した予測不能な展開に。
 
@@ -191,17 +202,20 @@ Row 7:  [RV][DL][SAT][--][--][--][--][--]  ← グローバル FX
 
 ```supercollider
 (
-~aStopGen.();
-~aCaptureNode !? { ~aCaptureNode.free };
-~aFxNode      !? { ~aFxNode.free };
-~voiceGroup   !? { ~voiceGroup.free };
-~fxGroup      !? { ~fxGroup.free };
-~mixBus       !? { ~mixBus.free };
-~liveRollBuffer !? { ~liveRollBuffer.free };
+~stopGen.();
+~activityRoutine !? { ~activityRoutine.stop };
+~liveCaptureNode !? { ~liveCaptureNode.free };
+~fxNode          !? { ~fxNode.free };
+~captureGroup    !? { ~captureGroup.freeAll; ~captureGroup.free };
+~voiceGroup      !? { ~voiceGroup.freeAll; ~voiceGroup.free };
+~fxGroup         !? { ~fxGroup.free };
+~mixBus          !? { ~mixBus.free };
+~liveRollBuffer  !? { ~liveRollBuffer.free };
 ~snapshotBuffers.do { |b| b !? { b.free } };
-~sourcePool.do { |b| b !? { b.free } };
+~sourcePool.do      { |b| b !? { b.free } };
 OSCdef(\aMonomeGrid).free;
-~aClearLeds.();
+OSCdef(\aSerialoscDevice).free;
+~clearLeds.();
 "ambient_machine stopped".postln;
 )
 ```
