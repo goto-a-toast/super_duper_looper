@@ -34,7 +34,13 @@
 ~aLiveRollSeconds   = 30;
 ~aSnapshotSeconds   = 4;
 ~aMaxConcurrent     = 12;             // safety cap
-~aSamplePath        = PathName(thisProcess.nowExecutingPath).parentPath +/+ "samples";
+// sample folder: local Mac path first, fallback to ./samples next to this file
+~aSamplePath        = "/Users/gotouakira/Desktop/ClaudeWork/super_duper_looper/samples";
+if(File.exists(~aSamplePath).not) {
+    thisProcess.nowExecutingPath !? { |p|
+        ~aSamplePath = PathName(p).parentPath +/+ "samples";
+    };
+};
 
 // monome OSC ports (same convention as super_duper_looper.scd)
 ~aMonomeReceivePort = 57122;          // distinct from the looper's 57121
@@ -90,6 +96,9 @@
 
 ~genScheduler       = nil;
 ~activityRoutine    = nil;
+
+~aWindow            = nil;            // status GUI (display only)
+~statusText         = nil;
 
 ~aLedState          = Array.fill(8, { Array.fill(8, 0) });
 
@@ -215,18 +224,37 @@
 // Sample bank loader
 // ---------------------------------------------------------------------------
 ~loadSamples = {
-    var pn    = PathName(~aSamplePath);
-    var files = pn.files.select { |f|
-        #["wav","aif","aiff","flac"].includes(f.extension.toLower)
-    };
-    if(files.size == 0) {
-        "no samples in % (live input only)".format(~aSamplePath).postln;
+    var pn, allFiles, files;
+    if(File.exists(~aSamplePath).not) {
+        "WARNING: sample folder not found: %".format(~aSamplePath).postln;
+        "         running with live input only".postln;
     } {
-        files.do { |f|
-            var buf = Buffer.read(s, f.fullPath);
-            ~sourcePool = ~sourcePool.add(buf);
+        pn       = PathName(~aSamplePath);
+        allFiles = pn.files;
+        files    = allFiles.select { |f|
+            #["wav","aif","aiff","flac"].includes(f.extension.toLower)
         };
-        "loaded % samples from %".format(files.size, ~aSamplePath).postln;
+        if(files.size == 0) {
+            "no loadable samples in % (live input only)".format(~aSamplePath).postln;
+            if(allFiles.size > 0) {
+                "folder contains % file(s) but none end in .wav/.aif/.aiff/.flac:"
+                    .format(allFiles.size).postln;
+                allFiles.do { |f| ("  " ++ f.fileName).postln };
+            };
+        } {
+            "loading % samples from % ...".format(files.size, ~aSamplePath).postln;
+            files.do { |f|
+                // voices expect mono buffers (GrainBuf / PlayBuf.ar(1, ...)),
+                // so read only the first channel of each file
+                var buf = Buffer.readChannel(s, f.fullPath, channels: [0],
+                    action: { |b|
+                        "  loaded: %  (% s)".format(f.fileName,
+                            (b.numFrames / b.sampleRate).round(0.1)).postln;
+                        ~updateGui !? { ~updateGui.() };
+                    });
+                ~sourcePool = ~sourcePool.add(buf);
+            };
+        };
     };
 };
 
@@ -317,6 +345,8 @@
     row7[3] = if(~fxShimmer)  { 1 } { 0 };
     row7[4 + ~masterIdx.clip(0, 3)] = 1;
     ~ledRow.(7, row7);
+
+    ~updateGui !? { ~updateGui.() };
 };
 
 // ---------------------------------------------------------------------------
@@ -681,6 +711,48 @@
 };
 
 // ---------------------------------------------------------------------------
+// Status GUI — display only, follows every state change automatically
+// ---------------------------------------------------------------------------
+~updateGui = {
+    {
+        if(~aWindow.notNil and: { ~statusText.notNil }) {
+            var onoff = { |b| if(b) { "ON " } { "off" } };
+            var en    = ~allVoiceTypes.collect { |k, i|
+                if(~enabledVoiceTypes.includes(k)) { ~voiceTypeLabels[i] } { "-" }
+            }.join(" ");
+            var snaps = ~snapshotFilled.collect { |f| if(f) { "*" } { "." } }.join(" ");
+            ~statusText.string = (
+                   "engine   : %\n".format(onoff.(~aTransport))
+                ++ "density  : %     bias : % (0=live 7=sample)\n"
+                    .format(~density, ~sourceBias)
+                ++ "palette  : %\n".format(~paletteNames[~palette])
+                ++ "voices   : %     drone : %\n".format(en, onoff.(~droneActive))
+                ++ "FX       : REV %  DLY %  SAT %  SHM %\n".format(
+                    onoff.(~fxReverb), onoff.(~fxDelay),
+                    onoff.(~fxSaturate), onoff.(~fxShimmer))
+                ++ "volume   : %\n".format(~masterAmp)
+                ++ "snapshot : %   (* = recorded)\n".format(snaps)
+                ++ "samples  : % loaded\n".format(~sourcePool.size)
+                ++ "monome   : %".format(
+                    if(~aMonomeConnected) { "connected" } { "not found" })
+            );
+        };
+    }.defer;
+};
+
+~makeGui = {
+    ~aWindow !? { if(~aWindow.isClosed.not) { ~aWindow.close } };
+    ~aWindow = Window("ambient_machine status", Rect(60, 60, 380, 220))
+        .alwaysOnTop_(true);
+    ~statusText = StaticText(~aWindow, Rect(14, 10, 352, 200))
+        .font_(Font("Menlo", 13))
+        .align_(\topLeft);
+    ~aWindow.onClose = { ~aWindow = nil; ~statusText = nil };
+    ~aWindow.front;
+    ~updateGui.();
+};
+
+// ---------------------------------------------------------------------------
 // Boot sequence
 // ---------------------------------------------------------------------------
 s.waitForBoot({
@@ -714,6 +786,7 @@ s.waitForBoot({
     ~setupOSC.();
     ~setupMonome.();
     ~startActivityFade.();
+    { ~makeGui.() }.defer;
 
     "=== ambient_machine ready ===".postln;
     "live capture: running (% s rolling buffer)".format(~aLiveRollSeconds).postln;
@@ -736,6 +809,7 @@ s.waitForBoot({
 (
 ~stopGen.();
 ~activityRoutine !? { ~activityRoutine.stop };
+~aWindow         !? { { ~aWindow.close }.defer };
 ~liveCaptureNode !? { ~liveCaptureNode.free };
 ~fxNode          !? { ~fxNode.free };
 ~captureGroup    !? { ~captureGroup.freeAll; ~captureGroup.free };
