@@ -648,6 +648,13 @@ if(File.exists(~aSamplePath).not) {
     ~aMonomeConnected = true;
     deviceAddr.sendMsg("/sys/port",   ~aMonomeReceivePort);
     deviceAddr.sendMsg("/sys/prefix", ~aMonomePrefix);
+    // restore tilt streaming if it was on before a disconnect
+    if(~tiltEnabled) {
+        SystemClock.sched(0.3, {
+            ~aMonomeAddr.sendMsg(~aMonomePrefix ++ "/tilt/set", 0, 1);
+            nil
+        });
+    };
     SystemClock.sched(0.05, {
         ~aMonomeAddr.sendMsg(~aMonomePrefix ++ "/grid/led/all", 1);
         nil
@@ -663,12 +670,34 @@ if(File.exists(~aSamplePath).not) {
 ~setupMonome = {
     thisProcess.openUDPPort(~aMonomeReceivePort);
 
+    // persistent — handles both the initial /serialosc/list response and
+    // any subsequent reconnections (intentionally NOT freed after first hit)
     OSCdef(\aSerialoscDevice, { |msg|
         var devicePort = msg[3].asInteger;
         "monome found: type=%, port=%".format(msg[2], devicePort).postln;
         ~connectMonome.(devicePort);
-        OSCdef(\aSerialoscDevice).free;
     }, "/serialosc/device", recvPort: ~aMonomeReceivePort);
+
+    // spontaneous add notification (some serialosc versions send /serialosc/add
+    // instead of /serialosc/device when a device is hot-plugged)
+    OSCdef(\aSerialoscAdd, { |msg|
+        var devicePort = msg[3].asInteger;
+        "monome re-added: type=%, port=%".format(msg[2], devicePort).postln;
+        ~connectMonome.(devicePort);
+    }, "/serialosc/add", recvPort: ~aMonomeReceivePort);
+
+    // device removed: mark disconnected, re-query serialosc so we catch the
+    // reconnect automatically when the USB cable is plugged back in
+    OSCdef(\aSerialoscRemove, { |msg|
+        "monome device removed — reconnect when ready.".postln;
+        ~aMonomeConnected = false;
+        { ~updateGui !? { ~updateGui.() } }.defer;
+        SystemClock.sched(1.0, {
+            NetAddr("127.0.0.1", 12002).sendMsg("/serialosc/list",
+                "127.0.0.1", ~aMonomeReceivePort);
+            nil
+        });
+    }, "/serialosc/remove", recvPort: ~aMonomeReceivePort);
 
     fork {
         NetAddr("127.0.0.1", 12002).sendMsg("/serialosc/list",
@@ -896,6 +925,8 @@ s.waitForBoot({
 OSCdef(\aMonomeGrid).free;
 OSCdef(\aMonomeTilt).free;
 OSCdef(\aSerialoscDevice).free;
+OSCdef(\aSerialoscAdd).free;
+OSCdef(\aSerialoscRemove).free;
 ~clearLeds.();
 "ambient_machine stopped".postln;
 )
