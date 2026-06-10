@@ -54,6 +54,7 @@
 ~snapshotCursor     = 0;              // next snapshot slot to write
 
 ~voiceActivity      = Array.fill(4, 0); // 0..8, used for rows 0-3 LED meter
+~captureGroup       = nil;
 ~voiceGroup         = nil;
 ~fxGroup            = nil;
 ~mixBus             = nil;
@@ -362,7 +363,8 @@
     var slot = ~snapshotCursor;
     var buf  = ~snapshotBuffers[slot];
     buf.zero;
-    Synth(\aSnapshot, [\bufnum, buf, \inputBus, ~aInputBus]);
+    Synth(\aSnapshot, [\bufnum, buf, \inputBus, ~aInputBus],
+        target: ~captureGroup);
     ~snapshotCursor = (slot + 1) % 4;
     "snapshot recording into slot %".format(slot).postln;
 };
@@ -518,8 +520,9 @@
 // Boot sequence
 // ---------------------------------------------------------------------------
 s.waitForBoot({
-    ~voiceGroup = Group.new(s);
-    ~fxGroup    = Group.after(~voiceGroup);
+    ~captureGroup = Group.new(s);
+    ~voiceGroup   = Group.after(~captureGroup);
+    ~fxGroup      = Group.after(~voiceGroup);
     ~mixBus     = Bus.audio(s, 2);
 
     ~loadSynthDefs.();
@@ -534,7 +537,7 @@ s.waitForBoot({
     // always-on synths
     ~liveCaptureNode = Synth(\aLiveCapture,
         [\bufnum, ~liveRollBuffer, \inputBus, ~aInputBus],
-        target: ~voiceGroup);
+        target: ~captureGroup);
     ~fxNode = Synth(\aFX,
         [\inBus, ~mixBus.index, \outBus, ~aOutBus,
          \revAmt, if(~fxReverb) { 0.7 } { 0 },
@@ -569,6 +572,7 @@ s.waitForBoot({
 ~activityRoutine !? { ~activityRoutine.stop };
 ~liveCaptureNode !? { ~liveCaptureNode.free };
 ~fxNode          !? { ~fxNode.free };
+~captureGroup    !? { ~captureGroup.freeAll; ~captureGroup.free };
 ~voiceGroup      !? { ~voiceGroup.freeAll; ~voiceGroup.free };
 ~fxGroup         !? { ~fxGroup.free };
 ~mixBus          !? { ~mixBus.free };
