@@ -97,11 +97,10 @@ if(File.exists(~aSamplePath).not) {
 ~genScheduler       = nil;
 ~activityRoutine    = nil;
 
-// tilt (accelerometer) — smoothed, drives pan / density / reverb live
-~tiltEnabled        = false;          // toggled by row 6 col... (and auto on connect)
-~tiltPanBias        = 0.0;            // -1..1, shifts voice pan center (X axis)
-~tiltDensityMod     = 1.0;            // 0.5..2.0, multiplies scheduler density (Y axis)
-~tiltRevMod         = nil;            // 0..1 reverb override, nil = manual control (Z axis)
+// tilt (accelerometer) — drives a resonant low-pass filter in the FX chain
+~tiltEnabled        = false;
+~tiltFreq           = 20000;          // current cutoff Hz (X axis), 20000 = open
+~tiltRq             = 1.0;            // current rq (Y axis), smaller = sharper peak
 ~tiltRaw            = [0, 0, 0];      // last raw x,y,z for the GUI
 
 ~aWindow            = nil;            // status GUI (display only)
@@ -193,10 +192,13 @@ if(File.exists(~aSamplePath).not) {
         Out.ar(outBus, sig * env * amp);
     }).add;
 
-    // Global FX chain: in(stereo) → delay → reverb (+shimmer feedback) → saturation → out
+    // Global FX chain: in(stereo) → delay → reverb (+shimmer feedback)
+    //                  → saturation → tilt filter → out
     SynthDef(\aFX, { |inBus = 0, outBus = 0, revAmt = 0.7, delAmt = 0.5,
-                      satAmt = 0, shimAmt = 0, masterAmp = 0.8|
-        var in, dly, fb, dry, rev, sat, sig;
+                      satAmt = 0, shimAmt = 0,
+                      filtOn = 0, filtFreq = 20000, filtRq = 1.0,
+                      masterAmp = 0.8|
+        var in, dly, fb, dry, rev, sat, sig, filtered;
         in  = In.ar(inBus, 2);
         dly = CombL.ar(in, 4.0, 3.5, 8) * delAmt;
         fb  = LocalIn.ar(2) * shimAmt;          // octave-up reverb feedback
@@ -208,6 +210,11 @@ if(File.exists(~aSamplePath).not) {
         sig = (dry * (1 - revAmt)) + (rev * revAmt);
         sat = (sig * (1 + (satAmt * 4))).tanh;
         sig = SelectX.ar(satAmt, [sig, sat]);
+        // tilt-controlled resonant low-pass (lagged so tilt sweeps are smooth)
+        filtered = RLPF.ar(sig,
+            Lag.kr(filtFreq, 0.15).clip(60, 20000),
+            Lag.kr(filtRq, 0.15).clip(0.1, 1.0));
+        sig = SelectX.ar(Lag.kr(filtOn, 0.2), [sig, filtered]);
         Out.ar(outBus, sig.softclip * masterAmp);
     }).add;
 
@@ -391,8 +398,7 @@ if(File.exists(~aSamplePath).not) {
     src = src ?? { ~chooseSource.() };
     if(src.notNil) {
         pos  = pos ?? { rrand(0.0, 0.85) };
-        // tilt X shifts the random pan center left/right
-        pan  = (rrand(-0.5, 0.5) + ~tiltPanBias).clip(-1, 1);
+        pan  = rrand(-0.8, 0.8);
         amp  = exprand(0.08, 0.32);
         dur  = exprand(4.0, 12.0);
         args = [\bufnum, src, \outBus, ~mixBus.index, \pos, pos, \pan, pan,
@@ -442,8 +448,7 @@ if(File.exists(~aSamplePath).not) {
                 if(~voiceGroup.notNil) {
                     ~spawnVoice.();
                 };
-                // tilt Y continuously scales density between the 1/2/3 steps
-                (exprand(1.5, 6.0) / (~density * ~tiltDensityMod)).wait;
+                (exprand(1.5, 6.0) / ~density).wait;
             } {
                 0.5.wait;
             };
@@ -590,7 +595,9 @@ if(File.exists(~aSamplePath).not) {
 };
 
 // ---------------------------------------------------------------------------
-// Tilt (accelerometer) — enable on device, map smoothed X/Y/Z to params
+// Tilt (accelerometer) — resonant low-pass filter on the whole mix
+//   X (tilt left/right) : cutoff   left = dark/closed, right = bright/open
+//   Y (tilt front/back) : resonance — tilt away from you for a sharper peak
 // ---------------------------------------------------------------------------
 // raw axis values are roughly 0..255 with ~127 at rest; normalize to -1..1
 ~tiltNorm = { |raw| ((raw - 127) / 127.0).clip(-1, 1) };
@@ -601,38 +608,33 @@ if(File.exists(~aSamplePath).not) {
         // tell serialosc to start/stop streaming /monome/tilt for sensor 0
         ~aMonomeAddr.sendMsg(~aMonomePrefix ++ "/tilt/set", 0, on.asInteger);
     };
+    ~fxNode !? { ~fxNode.set(\filtOn, on.asInteger) };
     if(on.not) {
-        // release tilt's hold on the parameters so manual control resumes
-        ~tiltPanBias    = 0.0;
-        ~tiltDensityMod = 1.0;
-        if(~tiltRevMod.notNil) {
-            ~tiltRevMod = nil;
-            ~fxNode !? { ~fxNode.set(\revAmt, if(~fxReverb) { 0.7 } { 0 }) };
-        };
+        // open the filter back up so the mix returns to normal
+        ~tiltFreq = 20000;
+        ~tiltRq   = 1.0;
+        ~fxNode !? { ~fxNode.set(\filtFreq, 20000, \filtRq, 1.0) };
     };
     ~updateDisplay.();
-    "tilt: %".format(if(on) { "ON" } { "off" }).postln;
+    "tilt filter: %".format(if(on) { "ON" } { "off" }).postln;
 };
 
 ~toggleTilt = { ~enableTilt.(~tiltEnabled.not) };
 
 // called for each /monome/tilt message; one-pole smoothing tames hand jitter
-~tiltSmooth = 0.2;   // 0..1, lower = smoother/slower
+~tiltSmooth = 0.25;  // 0..1, lower = smoother/slower
 ~handleTilt = { |x, y, z|
-    var nx, ny, nz, k;
+    var k, freq, rq;
     ~tiltRaw = [x, y, z];
     if(~tiltEnabled) {
-        k  = ~tiltSmooth;
-        nx = ~tiltNorm.(x);
-        ny = ~tiltNorm.(y).linlin(-1, 1, 0.5, 2.0);
-        nz = ~tiltNorm.(z).linlin(-1, 1, 0.0, 1.0);
-        // X (left/right): pan center, full -1..1
-        ~tiltPanBias    = (~tiltPanBias    * (1 - k)) + (nx * k);
-        // Y (front/back): density multiplier 0.5..2.0 (rest = ~1.0)
-        ~tiltDensityMod = (~tiltDensityMod * (1 - k)) + (ny * k);
-        // Z (twist): reverb amount 0..1, overrides manual reverb while tilting
-        ~tiltRevMod     = ((~tiltRevMod ? nz) * (1 - k)) + (nz * k);
-        ~fxNode !? { ~fxNode.set(\revAmt, ~tiltRevMod) };
+        k    = ~tiltSmooth;
+        // X: cutoff 150 Hz .. 16 kHz, exponential so the sweep sounds even
+        freq = ~tiltNorm.(x).linexp(-1, 1, 150, 16000);
+        // Y: resonance, rq 1.0 (none) .. 0.15 (singing peak)
+        rq   = ~tiltNorm.(y).linlin(-1, 1, 1.0, 0.15);
+        ~tiltFreq = (~tiltFreq * (1 - k)) + (freq * k);
+        ~tiltRq   = (~tiltRq   * (1 - k)) + (rq   * k);
+        ~fxNode !? { ~fxNode.set(\filtFreq, ~tiltFreq, \filtRq, ~tiltRq) };
         ~updateGui !? { ~updateGui.() };
     };
 };
@@ -797,9 +799,10 @@ if(File.exists(~aSamplePath).not) {
                 ++ "samples  : % loaded\n".format(~sourcePool.size)
                 ++ "monome   : %\n".format(
                     if(~aMonomeConnected) { "connected" } { "not found" })
-                ++ "tilt     : %  X:% Y:% Z:%".format(
+                ++ "tilt     : %  cutoff: % Hz   res: %".format(
                     if(~tiltEnabled) { "ON " } { "off" },
-                    ~tiltRaw[0], ~tiltRaw[1], ~tiltRaw[2])
+                    ~tiltFreq.round(1).asInteger,
+                    (1.0 - ~tiltRq).round(0.01))
             );
         };
     }.defer;
@@ -866,9 +869,9 @@ s.waitForBoot({
     "  Row 7   : REV DLY SAT SHIMMER | master volume (col 4-7)".postln;
     "".postln;
     "--- tilt (accelerometer) ---".postln;
-    "  evaluate  ~toggleTilt.()  to steer hands-free:".postln;
-    "    X tilt L/R  -> pan center    Y tilt F/B -> density".postln;
-    "    Z twist     -> reverb amount (overrides manual reverb while on)".postln;
+    "  evaluate  ~toggleTilt.()  for the tilt filter (resonant low-pass):".postln;
+    "    tilt left/right -> cutoff (dark <-> bright)".postln;
+    "    tilt front/back -> resonance (flat <-> singing peak)".postln;
 });
 )
 
