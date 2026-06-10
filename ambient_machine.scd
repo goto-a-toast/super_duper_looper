@@ -599,7 +599,7 @@ if(File.exists(~aSamplePath).not) {
     ~tiltEnabled = on;
     if(~aMonomeConnected) {
         // tell serialosc to start/stop streaming /monome/tilt for sensor 0
-        ~aMonomeAddr.sendMsg(~aMonomePrefix ++ "/tilt/set", 0, on.binaryValue);
+        ~aMonomeAddr.sendMsg(~aMonomePrefix ++ "/tilt/set", 0, on.asInteger);
     };
     if(on.not) {
         // release tilt's hold on the parameters so manual control resumes
