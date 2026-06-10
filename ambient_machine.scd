@@ -239,7 +239,9 @@ if(File.exists(~aSamplePath).not) {
 // ---------------------------------------------------------------------------
 ~loadSamples = {
     var pn, allFiles, files, exts;
-    exts = #["wav", "aif", "aiff", "aifc", "flac", "ogg", "caf"];
+    // symbols, not strings: Array.includes compares with === (identity),
+    // so two equal-content Strings never match — Symbols always do
+    exts = #[\wav, \aif, \aiff, \aifc, \flac, \ogg, \caf];
     "sample path: %".format(~aSamplePath).postln;
     if(File.exists(~aSamplePath).not) {
         "WARNING: sample folder not found: %".format(~aSamplePath).postln;
@@ -249,7 +251,7 @@ if(File.exists(~aSamplePath).not) {
         pn       = PathName(~aSamplePath);
         allFiles = pn.deepFiles;   // includes subfolders
         files    = allFiles.select { |f|
-            exts.includes(f.extension.toLower)
+            exts.includes(f.extension.toLower.asSymbol)
         };
         if(files.size == 0) {
             "no loadable samples in % (live input only)".format(~aSamplePath).postln;
